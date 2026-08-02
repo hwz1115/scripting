@@ -40,7 +40,4 @@ http://ngcdn006.cnr.cn/live/szzs/index.m3u8
 
 #EXTINF:-1 tvg-name="RTI" group-title="國外華語電台",RTI 中央廣播電臺 (對外國際廣播)
 https://streamak0138.akamaized.net/live0138lh-mbm9/_definst_/rti3/chunklist.m3u8
-# 以下国外华语电台暂未找到稳定可用的直播地址，先不加入：
-# VOA 美国之音 - 官网无常驻直播流
-# RFA 自由亚洲电台 - 2025年经费危机后服务大幅缩减，直播地址已失效
-# RFI 法广中文 - 每日仅播出3小时，非常驻直播
+
