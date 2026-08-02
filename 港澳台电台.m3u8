@@ -1,0 +1,46 @@
+#EXTM3U
+#EXTINF:-1 tvg-name="RTHK Radio 1" tvg-logo="https://rthk.hk" group-title="香港電台",香港電台第一台 (綜合新聞)
+https://rthk.hk/live1.m3u
+#EXTINF:-1 tvg-name="RTHK Radio 2" tvg-logo="https://rthk.hk" group-title="香港電台",香港電台第二台 (流行音樂)
+https://rthk.hk/live2.m3u
+#EXTINF:-1 tvg-name="RTHK Radio 4" tvg-logo="https://rthk.hk" group-title="香港電台",香港電台第四台 (古典音樂)
+https://rthk.hk/live4.m3u
+#EXTINF:-1 tvg-name="RTHK Radio 5" tvg-logo="https://rthk.hk" group-title="香港電台",香港電台第五台 (戲曲長者)
+https://rthk.hk/live5.m3u
+#EXTINF:-1 tvg-name="CRHK 903" group-title="香港商業電台",商業電台 叱咤903 (流行娛樂)
+https://d2agljdoug3z0j.cloudfront.net/radio-HTTP/cr2-hd.3gp/chunklist.m3u8
+#EXTINF:-1 tvg-name="Metro Info" group-title="香港新城電台",新城知訊台 (財經娛樂)
+https://metroradio-lh.akamaihd.net/i/997_h@349799/master.m3u8
+
+#EXTINF:-1 tvg-name="TDM Radio Chinese" group-title="澳門電台",澳門電台 (華語頻道)
+http://live4.tdm.com.mo/radio/rch1.live/playlist.m3u8
+#EXTINF:-1 tvg-name="TDM Radio Portuguese" group-title="澳門電台",澳門電台 (葡語頻道)
+http://live4.tdm.com.mo/radio/rch2.live/playlist.m3u8
+
+# 以下台湾电台尚未核实到真实推流地址（官网有防爬保护），暂时注释，避免播放器解析报错
+# #EXTINF:-1 tvg-name="BCC Trend" group-title="台灣中廣",中廣流行網 (i-like)
+# 待补充
+# #EXTINF:-1 tvg-name="BCC Music" group-title="台灣中廣",中廣音樂網 (i-radio)
+# 待补充
+# #EXTINF:-1 tvg-name="HitFM Taipei" group-title="台灣 HitFM",Hit FM 聯播網 (台北總台)
+# 待补充
+# #EXTINF:-1 tvg-name="UFO Radio" group-title="台灣飛碟",飛碟聯播網 (綜合脫口秀)
+# 待补充
+# #EXTINF:-1 tvg-name="Da Ai Radio" group-title="台灣大愛",大愛網絡電台
+# 待补充
+
+#EXTINF:-1 tvg-name="CNR 1" group-title="中央人民廣播電台",CNR 中國之聲
+http://ngcdn001.cnr.cn/live/zgzs/index.m3u8
+#EXTINF:-1 tvg-name="CNR 3" group-title="中央人民廣播電台",CNR 音樂之聲
+http://ngcdn003.cnr.cn/live/yyzs/index.m3u8
+#EXTINF:-1 tvg-name="CNR 7" group-title="中央人民廣播電台",CNR 華夏之聲 (對港澳廣播)
+http://ngcdn007.cnr.cn/live/hxzs/index.m3u8
+#EXTINF:-1 tvg-name="CNR 14" group-title="中央人民廣播電台",CNR 神州之聲 (對台灣廣播)
+http://ngcdn006.cnr.cn/live/szzs/index.m3u8
+
+#EXTINF:-1 tvg-name="RTI" group-title="國外華語電台",RTI 中央廣播電臺 (對外國際廣播)
+https://streamak0138.akamaized.net/live0138lh-mbm9/_definst_/rti3/chunklist.m3u8
+# 以下国外华语电台暂未找到稳定可用的直播地址，先不加入：
+# VOA 美国之音 - 官网无常驻直播流
+# RFA 自由亚洲电台 - 2025年经费危机后服务大幅缩减，直播地址已失效
+# RFI 法广中文 - 每日仅播出3小时，非常驻直播
