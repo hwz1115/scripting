@@ -1,5 +1,6 @@
-// 版本：0.3.0
+// 版本：0.3.1
 // 日期：2026-10-17
+// 0.3.1：修复 0.3.0 压缩包里 script.json 是空的、导致 Scripting 报“不支持的脚本文件”
 // 0.3.0：新增自动刷新（关闭 / 3秒 / 5秒 / 10秒，点一下循环切换）
 // 0.2.0：密钥不再写在代码里，首次运行时在界面里粘贴并保存到手机（可以放心放公开仓库）
 // 0.1.1：修复筛选按钮点不动（一行放多个按钮会被一起触发，改成一行一个按钮，点一下循环切换）
@@ -162,7 +163,7 @@ function SurgeDnsApp({ initial, initialKey }: { initial: Entry[]; initialKey: st
   return (
     <NavigationStack>
       <List
-        navigationTitle="Surge DNS 观察 v0.3.0"
+        navigationTitle="Surge DNS 观察 v0.3.1"
         navigationBarTitleDisplayMode="inline"
         toolbar={
           <Toolbar>
