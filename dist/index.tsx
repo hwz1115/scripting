@@ -1,7 +1,5 @@
-// 版本：0.3.1
+// 版本：0.2.0
 // 日期：2026-10-17
-// 0.3.1：修复 0.3.0 压缩包里 script.json 是空的、导致 Scripting 报“不支持的脚本文件”
-// 0.3.0：新增自动刷新（关闭 / 3秒 / 5秒 / 10秒，点一下循环切换）
 // 0.2.0：密钥不再写在代码里，首次运行时在界面里粘贴并保存到手机（可以放心放公开仓库）
 // 0.1.1：修复筛选按钮点不动（一行放多个按钮会被一起触发，改成一行一个按钮，点一下循环切换）
 // 作用：读取 Surge 的 DNS 缓存，显示每个网址走了哪个 DNS、用时多久、查到哪些 IP
@@ -26,12 +24,6 @@ import {
 
 const API = 'http://127.0.0.1:6171';
 const KEY_NAME = 'surgeDnsApiKey';
-
-// 自动刷新：0 表示关闭；refreshHook 由界面每次渲染时更新
-let autoSecond = 0;
-let tick = 0;
-let loading = false;
-let refreshHook: (() => void) | null = null;
 
 type Entry = {
   domain: string;
@@ -102,15 +94,12 @@ function SurgeDnsApp({ initial, initialKey }: { initial: Entry[]; initialKey: st
   const [q, setQ] = useState<string>('');
   const [msg, setMsg] = useState<string>(initialKey ? '' : '首次使用：请在下方粘贴 Surge 的 http-api 密钥并保存');
   const [updated, setUpdated] = useState<string>(nowText());
-  const [auto, setAuto] = useState<number>(0);
 
   const load = async (k: string) => {
     if (!k) {
       setMsg('还没有保存密钥：请在下方粘贴并保存');
       return;
     }
-    if (loading) return;
-    loading = true;
     try {
       const j = await api('/v1/dns', k);
       setEntries(j.dnsCache || []);
@@ -118,12 +107,7 @@ function SurgeDnsApp({ initial, initialKey }: { initial: Entry[]; initialKey: st
       setMsg('');
     } catch (e: any) {
       setMsg(`读取失败：${e && e.message ? e.message : String(e)}（Surge 是否已开启？密钥是否正确？）`);
-    } finally {
-      loading = false;
     }
-  };
-  refreshHook = () => {
-    load(key);
   };
 
   const flush = async () => {
@@ -163,7 +147,7 @@ function SurgeDnsApp({ initial, initialKey }: { initial: Entry[]; initialKey: st
   return (
     <NavigationStack>
       <List
-        navigationTitle="Surge DNS 观察 v0.3.1"
+        navigationTitle="Surge DNS 观察 v0.2.0"
         navigationBarTitleDisplayMode="inline"
         toolbar={
           <Toolbar>
@@ -195,16 +179,6 @@ function SurgeDnsApp({ initial, initialKey }: { initial: Entry[]; initialKey: st
             action={() => {
               const order = ['全部', '国内', '国外', '其他'];
               setFilter(order[(order.indexOf(filter) + 1) % order.length]);
-            }}
-          />
-          <Button
-            title={`自动刷新：${auto === 0 ? '关闭' : auto + ' 秒'}（点一下切换）`}
-            action={() => {
-              const order = [0, 3, 5, 10];
-              const n = order[(order.indexOf(auto) + 1) % order.length];
-              setAuto(n);
-              autoSecond = n;
-              tick = 0;
             }}
           />
           <TextField title="搜索网址" prompt="输入网址的一部分，例如 baidu" value={q} onChanged={setQ} />
@@ -254,19 +228,10 @@ async function run() {
       initial = j.dnsCache || [];
     } catch {}
   }
-  const timer = setInterval(() => {
-    if (autoSecond <= 0) return;
-    tick += 1;
-    if (tick >= autoSecond) {
-      tick = 0;
-      if (refreshHook) refreshHook();
-    }
-  }, 1000);
   await Navigation.present({
     element: <SurgeDnsApp initial={initial} initialKey={key} />,
     modalPresentationStyle: 'pageSheet',
   });
-  clearInterval(timer);
   Script.exit();
 }
 
