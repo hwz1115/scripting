@@ -1,5 +1,6 @@
-// 版本：0.3.1
+// 版本：0.3.2
 // 日期：2026-10-17
+// 0.3.2：修复运行报错 Cannot find name 'setInterval' / 'clearInterval'（Scripting 里没有这两个名字，改用 setTimeout 循环实现自动刷新）
 // 0.3.1：修复 0.3.0 压缩包里 script.json 是空的、导致 Scripting 报“不支持的脚本文件”
 // 0.3.0：新增自动刷新（关闭 / 3秒 / 5秒 / 10秒，点一下循环切换）
 // 0.2.0：密钥不再写在代码里，首次运行时在界面里粘贴并保存到手机（可以放心放公开仓库）
@@ -24,6 +25,9 @@ import {
   ToolbarItem,
 } from 'scripting';
 
+// Scripting 的类型检查对计时器函数不太一致，这里补一个声明（只影响类型检查，运行时用的是系统自带的）
+declare function setTimeout(handler: () => void, ms?: number): any;
+
 const API = 'http://127.0.0.1:6171';
 const KEY_NAME = 'surgeDnsApiKey';
 
@@ -32,6 +36,24 @@ let autoSecond = 0;
 let tick = 0;
 let loading = false;
 let refreshHook: (() => void) | null = null;
+let running = true;
+
+// 每秒走一次的循环（用 setTimeout 一层层接下去，退出脚本时 running 变 false 就停）
+function scheduleTick() {
+  // 万一系统里没有 setTimeout，只是自动刷新不工作，脚本本身仍然能打开
+  if (typeof setTimeout === 'undefined') return;
+  setTimeout(() => {
+    if (!running) return;
+    if (autoSecond > 0) {
+      tick += 1;
+      if (tick >= autoSecond) {
+        tick = 0;
+        if (refreshHook) refreshHook();
+      }
+    }
+    scheduleTick();
+  }, 1000);
+}
 
 type Entry = {
   domain: string;
@@ -163,7 +185,7 @@ function SurgeDnsApp({ initial, initialKey }: { initial: Entry[]; initialKey: st
   return (
     <NavigationStack>
       <List
-        navigationTitle="Surge DNS 观察 v0.3.1"
+        navigationTitle="Surge DNS 观察 v0.3.2"
         navigationBarTitleDisplayMode="inline"
         toolbar={
           <Toolbar>
@@ -254,19 +276,13 @@ async function run() {
       initial = j.dnsCache || [];
     } catch {}
   }
-  const timer = setInterval(() => {
-    if (autoSecond <= 0) return;
-    tick += 1;
-    if (tick >= autoSecond) {
-      tick = 0;
-      if (refreshHook) refreshHook();
-    }
-  }, 1000);
+  running = true;
+  scheduleTick();
   await Navigation.present({
     element: <SurgeDnsApp initial={initial} initialKey={key} />,
     modalPresentationStyle: 'pageSheet',
   });
-  clearInterval(timer);
+  running = false;
   Script.exit();
 }
 
