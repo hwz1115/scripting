@@ -1,5 +1,6 @@
-// 版本：0.4.1
+// 版本：0.5.0
 // 日期：2026-10-18
+// 0.5.0：新增“展开详情”（每条记录可展开，看全部 IP、别名链、缓存到期时间、解析过程）；去掉搜索框下的临时调试行
 // 0.4.1：修复搜索搜不到（输入法常在词后自动补空格，现在会去掉首尾空格和隐藏字符；多个词用空格隔开表示“同时包含”）；搜索框下临时显示实际搜索词，方便排查
 // 0.4.0：新增历史记录（自动保存出现过的网址，可切换查看、可清空；最多保留 3000 条）
 // 0.3.2：修复运行报错 Cannot find name 'setInterval' / 'clearInterval'（Scripting 里没有这两个名字，改用 setTimeout 循环实现自动刷新）
@@ -65,6 +66,8 @@ type Entry = {
   data: string[];
   timeCost: number;
   path?: string;
+  logs?: string[];
+  expiresTime?: number;
 };
 
 // 历史记录：同一个网址 + 同一个 DNS 服务器算一条
@@ -84,6 +87,8 @@ type Row = {
   cost: number;
   ips: string;
   extra: string;
+  key: string;
+  detail: string[];
 };
 
 // 历史的“唯一正本”放在这里，界面里的 state 只是用来刷新显示
@@ -139,6 +144,24 @@ function mergeHist(cache: Entry[]): number {
   // 有新网址就马上存；没有新网址时每 10 次刷新存一次，减少写入
   if (added > 0 || mergeCount % 10 === 0) saveHist();
   return added;
+}
+
+// 生成“展开详情”里要显示的几行字（来自 Surge 缓存里的完整记录）
+function detailOf(e: Entry): string[] {
+  const lines: string[] = [];
+  lines.push(`全部 IP：${(e.data || []).join(', ') || '无'}`);
+  if (e.path) {
+    const parts = String(e.path).split(' -> ');
+    // 最后一段是 IP 列表，去掉；前面剩下的是别名（CNAME）链
+    const chain = parts.filter((x, i) => !(i === parts.length - 1 && /^[0-9a-fA-F:., ]+$/.test(x)));
+    if (chain.length > 1) lines.push('别名链：' + chain.join(' → '));
+  }
+  if (typeof e.expiresTime === 'number') {
+    const left = Math.round(e.expiresTime - Date.now() / 1000);
+    lines.push(`缓存到期：${timeText(e.expiresTime * 1000)}（${left > 0 ? '还剩 ' + left + ' 秒' : '已过期'}）`);
+  }
+  (e.logs || []).slice(0, 8).forEach((l) => lines.push('· ' + l));
+  return lines;
 }
 
 // 把输入的搜索词整理成一组小词：去掉隐藏字符、全角转半角、去掉首尾空格、转小写、按空格拆开
@@ -226,6 +249,7 @@ function SurgeDnsApp({ initial, initialKey }: { initial: Entry[]; initialKey: st
   const [view, setView] = useState<string>('缓存');
   const [hist, setHist] = useState<Hist[]>(histStore.slice());
   const [confirmClear, setConfirmClear] = useState<boolean>(false);
+  const [expandedKey, setExpandedKey] = useState<string>('');
 
   const load = async (k: string) => {
     if (!k) {
@@ -296,6 +320,8 @@ function SurgeDnsApp({ initial, initialKey }: { initial: Entry[]; initialKey: st
     cost: e.timeCost,
     ips: (e.data || []).slice(0, 2).join(', '),
     extra: '',
+    key: `${e.domain}|${e.server || ''}`,
+    detail: detailOf(e),
   }));
   const histRows: Row[] = hist
     .slice()
@@ -306,6 +332,13 @@ function SurgeDnsApp({ initial, initialKey }: { initial: Entry[]; initialKey: st
       cost: h.cost,
       ips: h.ips,
       extra: `首次 ${timeText(h.first)} · 最近 ${timeText(h.last)}`,
+      key: `${h.domain}|${h.server || ''}`,
+      detail: [
+        `IP：${h.ips || '无'}（历史只保存前 2 个 IP）`,
+        `首次出现：${timeText(h.first)}`,
+        `最近出现：${timeText(h.last)}`,
+        '完整的解析过程请切到“当前缓存”里看',
+      ],
     }));
   const base: Row[] = view === '历史' ? histRows : cacheRows;
 
@@ -322,7 +355,7 @@ function SurgeDnsApp({ initial, initialKey }: { initial: Entry[]; initialKey: st
   return (
     <NavigationStack>
       <List
-        navigationTitle="Surge DNS 观察 v0.4.1"
+        navigationTitle="Surge DNS 观察 v0.5.0"
         navigationBarTitleDisplayMode="inline"
         toolbar={
           <Toolbar>
@@ -374,11 +407,6 @@ function SurgeDnsApp({ initial, initialKey }: { initial: Entry[]; initialKey: st
             }}
           />
           <TextField title="搜索网址" prompt="输入网址的一部分，例如 baidu" value={q} onChanged={setQ} />
-          {q ? (
-            <Text font="caption" foregroundStyle="secondaryLabel">
-              {`实际搜索：${terms.length ? terms.map((t) => `「${t}」`).join(' + ') : '（空）'}　输入了 ${q.length} 个字符`}
-            </Text>
-          ) : null}
           <Button title="清空 DNS 缓存" action={flush} />
           <Button
             title={confirmClear ? `再点一次确认：清空全部 ${hist.length} 条历史` : `清空历史记录（现有 ${hist.length} 条）`}
@@ -400,6 +428,17 @@ function SurgeDnsApp({ initial, initialKey }: { initial: Entry[]; initialKey: st
                 </HStack>
                 <Text font="caption" foregroundStyle="secondaryLabel">{r.ips || '无 IP'}</Text>
                 {r.extra ? <Text font="caption" foregroundStyle="secondaryLabel">{r.extra}</Text> : null}
+                <Button
+                  title={expandedKey === r.key ? '收起详情' : '展开详情'}
+                  action={() => setExpandedKey(expandedKey === r.key ? '' : r.key)}
+                />
+                {expandedKey === r.key
+                  ? r.detail.map((line, j) => (
+                      <Text font="caption" foregroundStyle="secondaryLabel" key={`${r.key}-d${j}`}>
+                        {line}
+                      </Text>
+                    ))
+                  : null}
               </VStack>
             );
           })}
