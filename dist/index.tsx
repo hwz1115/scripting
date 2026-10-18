@@ -1,14 +1,14 @@
-// 版本：0.5.0
+// 版本：0.6.0
 // 日期：2026-10-18
-// 0.5.0：新增“展开详情”（每条记录可展开，看全部 IP、别名链、缓存到期时间、解析过程）；去掉搜索框下的临时调试行
-// 0.4.1：修复搜索搜不到（输入法常在词后自动补空格，现在会去掉首尾空格和隐藏字符；多个词用空格隔开表示“同时包含”）；搜索框下临时显示实际搜索词，方便排查
+// 0.6.0：新增“最近请求”——显示每个网址走直连、代理还是被拦截、命中哪条规则；DNS 记录里也会显示它最近走的线路；历史记录会保存线路
+// 0.5.0：新增“展开详情”（全部 IP、别名链、缓存到期时间、解析过程）；去掉搜索框下的临时调试行
+// 0.4.1：修复搜索搜不到（去掉首尾空格和隐藏字符；多个词用空格隔开表示“同时包含”）
 // 0.4.0：新增历史记录（自动保存出现过的网址，可切换查看、可清空；最多保留 3000 条）
-// 0.3.2：修复运行报错 Cannot find name 'setInterval' / 'clearInterval'（Scripting 里没有这两个名字，改用 setTimeout 循环实现自动刷新）
-// 0.3.1：修复 0.3.0 压缩包里 script.json 是空的、导致 Scripting 报“不支持的脚本文件”
+// 0.3.2：用 setTimeout 循环实现自动刷新（Scripting 里没有 setInterval / clearInterval）
 // 0.3.0：新增自动刷新（关闭 / 3秒 / 5秒 / 10秒，点一下循环切换）
 // 0.2.0：密钥不再写在代码里，首次运行时在界面里粘贴并保存到手机（可以放心放公开仓库）
-// 0.1.1：修复筛选按钮点不动（一行放多个按钮会被一起触发，改成一行一个按钮，点一下循环切换）
-// 作用：读取 Surge 的 DNS 缓存，显示每个网址走了哪个 DNS、用时多久、查到哪些 IP
+// 0.1.1：筛选按钮改成一行一个按钮，点一下循环切换
+// 作用：读取 Surge 的 DNS 缓存和最近请求，显示每个网址走了哪个 DNS、走了哪条线
 // 前提：Surge 的 [General] 里已设置 http-api = 密钥@127.0.0.1:6171
 
 import {
@@ -70,6 +70,24 @@ type Entry = {
   expiresTime?: number;
 };
 
+// 最近请求（只取需要的几项）
+type Req = {
+  id: number;
+  host: string; // 例如 ai.example.com:443
+  bare: string; // 去掉端口后的小写网址
+  method: string;
+  policy: string; // 实际走的线路，例如 DIRECT / REJECT / 某个节点名
+  rule: string; // 命中的规则，例如 FINAL
+  status: string;
+  remote: string; // 实际连到的地址
+  start: number; // 开始时间（秒）
+  kind: string; // 直连 / 代理 / 拦截
+  inBytes: number;
+  outBytes: number;
+  notes: string[];
+  timing: string;
+};
+
 // 历史记录：同一个网址 + 同一个 DNS 服务器算一条
 type Hist = {
   domain: string;
@@ -78,22 +96,27 @@ type Hist = {
   cost: number;
   first: number; // 第一次出现的时间（毫秒）
   last: number; // 最近一次出现的时间（毫秒）
+  policy?: string; // 最近一次看到的线路
+  rule?: string; // 最近一次命中的规则
 };
 
-// 界面上一行要显示的内容（缓存和历史共用）
+// 界面上一行要显示的内容（三个视图共用）
 type Row = {
-  domain: string;
-  server: string;
-  cost: number;
-  ips: string;
-  extra: string;
   key: string;
+  domain: string;
+  kind: string; // 国内/国外/系统/其他，或 直连/代理/拦截
+  sub: string;
+  ips: string;
+  route: string;
+  extra: string;
   detail: string[];
 };
 
 // 历史的“唯一正本”放在这里，界面里的 state 只是用来刷新显示
 let histStore: Hist[] = [];
 let mergeCount = 0;
+// 每个网址最近一次的线路（来自最近请求）
+let routeMap: { [host: string]: { policy: string; rule: string; kind: string } } = {};
 
 function loadHist(): Hist[] {
   try {
@@ -111,6 +134,106 @@ function saveHist() {
   } catch {}
 }
 
+// ---- 最近请求的整理 ----
+function hostOf(r: any): string {
+  let h = String((r && r.remoteHost) || '');
+  if (!h) {
+    // 只取“网址:端口”部分，不保留后面的路径（路径里可能有订阅密钥之类的内容）
+    const u = String((r && r.URL) || '');
+    const m = u.match(/^[a-zA-Z]+:\/\/([^\/?#]+)/);
+    h = m ? m[1] : u.split('/')[0];
+  }
+  return h;
+}
+
+function bareHost(h: string): string {
+  const v6 = h.match(/^\[(.+)\](?::\d+)?$/);
+  if (v6) return v6[1].toLowerCase();
+  const i = h.lastIndexOf(':');
+  if (i > 0 && h.indexOf(':') === i && /^\d+$/.test(h.slice(i + 1))) return h.slice(0, i).toLowerCase();
+  return h.toLowerCase();
+}
+
+function routeKindOf(policy: string, remote: string, rejected: boolean): string {
+  const p = (policy || '').toUpperCase();
+  if (rejected || p.indexOf('REJECT') === 0) return '拦截';
+  if (p === 'DIRECT' || /\(direct\)/i.test(remote || '')) return '直连';
+  return '代理';
+}
+
+function parseReqs(list: any[]): Req[] {
+  const out: Req[] = [];
+  (list || []).forEach((r) => {
+    if (!r) return;
+    const host = hostOf(r);
+    if (!host) return;
+    const policy = String(r.policyName || '');
+    const remote = String(r.remoteAddress || '');
+    const timing = (r.timingRecords || [])
+      .map((t: any) => `${mapTiming(String(t.name || ''))} ${typeof t.durationInMillisecond === 'number' ? t.durationInMillisecond : '?'}ms`)
+      .join(' · ');
+    out.push({
+      id: typeof r.id === 'number' ? r.id : 0,
+      host,
+      bare: bareHost(host),
+      method: String(r.method || ''),
+      policy,
+      rule: String(r.rule || ''),
+      status: String(r.status || ''),
+      remote,
+      start: typeof r.startDate === 'number' ? r.startDate : 0,
+      kind: routeKindOf(policy, remote, !!r.rejected),
+      inBytes: typeof r.inBytes === 'number' ? r.inBytes : 0,
+      outBytes: typeof r.outBytes === 'number' ? r.outBytes : 0,
+      notes: Array.isArray(r.notes) ? r.notes.map((x: any) => String(x)) : [],
+      timing,
+    });
+  });
+  out.sort((a, b) => b.start - a.start || b.id - a.id);
+  return out;
+}
+
+function mapTiming(n: string): string {
+  if (n === 'Rule Evaluating') return '规则匹配';
+  if (n === 'Establishing TCP Connection') return '建立连接';
+  return n;
+}
+
+// 把每个网址最近一次的线路记下来（先处理旧的，新的覆盖旧的）
+function updateRoutes(reqs: Req[]) {
+  reqs
+    .slice()
+    .reverse()
+    .forEach((r) => {
+      routeMap[r.bare] = { policy: r.policy, rule: r.rule, kind: r.kind };
+    });
+}
+
+function routeText(policy?: string, rule?: string, kind?: string): string {
+  if (!policy && !rule) return '';
+  return `线路：${kind ? kind + ' ' : ''}${policy || '—'} · 规则 ${rule || '—'}`;
+}
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// 请求的“展开详情”：状态、流量、耗时，以及过程记录里和规则、DNS、TLS 有关的几行
+function reqDetailOf(r: Req): string[] {
+  const lines: string[] = [];
+  lines.push(`状态：${r.status || '—'}　方式：${r.method || '—'}`);
+  lines.push(`流量：↓${fmtBytes(r.inBytes)} ↑${fmtBytes(r.outBytes)}`);
+  if (r.remote) lines.push(`连到：${r.remote}`);
+  if (r.timing) lines.push(`耗时：${r.timing}`);
+  r.notes
+    .filter((n) => /\[(Rule|DNS|TLS)\]/.test(n))
+    .slice(0, 10)
+    .forEach((n) => lines.push('· ' + n.replace(/^\d\d:\d\d:\d\d(\.\d+)?\s+/, '')));
+  return lines;
+}
+
 // 把这一次读到的缓存合并进历史，返回新增了几条
 function mergeHist(cache: Entry[]): number {
   const now = Date.now();
@@ -124,16 +247,21 @@ function mergeHist(cache: Entry[]): number {
     const k = e.domain + '|' + (e.server || '');
     const ips = (e.data || []).slice(0, 2).join(', ');
     const cost = typeof e.timeCost === 'number' ? e.timeCost : 0;
-    const old = index[k];
-    if (old) {
-      old.last = now;
-      old.cost = cost;
-      if (ips) old.ips = ips;
+    let rec = index[k];
+    if (rec) {
+      rec.last = now;
+      rec.cost = cost;
+      if (ips) rec.ips = ips;
     } else {
-      const h: Hist = { domain: e.domain, server: e.server || '', ips, cost, first: now, last: now };
-      histStore.push(h);
-      index[k] = h;
+      rec = { domain: e.domain, server: e.server || '', ips, cost, first: now, last: now };
+      histStore.push(rec);
+      index[k] = rec;
       added += 1;
+    }
+    const rt = routeMap[e.domain.toLowerCase()];
+    if (rt) {
+      rec.policy = rt.policy;
+      rec.rule = rt.rule;
     }
   });
   if (histStore.length > HIST_MAX) {
@@ -146,7 +274,7 @@ function mergeHist(cache: Entry[]): number {
   return added;
 }
 
-// 生成“展开详情”里要显示的几行字（来自 Surge 缓存里的完整记录）
+// 生成 DNS 记录“展开详情”里要显示的几行字（来自 Surge 缓存里的完整记录）
 function detailOf(e: Entry): string[] {
   const lines: string[] = [];
   lines.push(`全部 IP：${(e.data || []).join(', ') || '无'}`);
@@ -222,9 +350,10 @@ function kindOf(server: string): string {
 }
 
 function colorOf(kind: string): any {
-  if (kind === '国内') return 'systemGreen';
-  if (kind === '国外') return 'systemBlue';
+  if (kind === '国内' || kind === '直连') return 'systemGreen';
+  if (kind === '国外' || kind === '代理') return 'systemBlue';
   if (kind === '系统') return 'systemOrange';
+  if (kind === '拦截') return 'systemRed';
   return 'secondaryLabel';
 }
 
@@ -237,10 +366,16 @@ function nowText(): string {
   return new Date().toLocaleTimeString('zh-CN', { hour12: false });
 }
 
-function SurgeDnsApp({ initial, initialKey }: { initial: Entry[]; initialKey: string }) {
+const VIEW_NAMES: { [k: string]: string } = { 缓存: '当前缓存', 历史: '历史记录', 请求: '最近请求' };
+const VIEW_ORDER = ['缓存', '历史', '请求'];
+const DNS_FILTERS = ['全部', '国内', '国外', '其他'];
+const REQ_FILTERS = ['全部', '直连', '代理', '拦截'];
+
+function SurgeDnsApp({ initial, initialReqs, initialKey }: { initial: Entry[]; initialReqs: Req[]; initialKey: string }) {
   const [key, setKey] = useState<string>(initialKey);
   const [keyInput, setKeyInput] = useState<string>('');
   const [entries, setEntries] = useState<Entry[]>(initial);
+  const [reqs, setReqs] = useState<Req[]>(initialReqs);
   const [filter, setFilter] = useState<string>('全部');
   const [q, setQ] = useState<string>('');
   const [msg, setMsg] = useState<string>(initialKey ? '' : '首次使用：请在下方粘贴 Surge 的 http-api 密钥并保存');
@@ -261,6 +396,14 @@ function SurgeDnsApp({ initial, initialKey }: { initial: Entry[]; initialKey: st
     try {
       const j = await api('/v1/dns', k);
       const cache: Entry[] = j.dnsCache || [];
+      // 最近请求读不到也不影响 DNS 部分
+      let parsed: Req[] = [];
+      try {
+        const rj = await api('/v1/requests/recent', k);
+        parsed = parseReqs(rj.requests || []);
+      } catch {}
+      updateRoutes(parsed);
+      setReqs(parsed);
       setEntries(cache);
       mergeHist(cache);
       setHist(histStore.slice());
@@ -314,48 +457,78 @@ function SurgeDnsApp({ initial, initialKey }: { initial: Entry[]; initialKey: st
     await load(k);
   };
 
-  const cacheRows: Row[] = entries.map((e) => ({
-    domain: e.domain,
-    server: e.server,
-    cost: e.timeCost,
-    ips: (e.data || []).slice(0, 2).join(', '),
-    extra: '',
-    key: `${e.domain}|${e.server || ''}`,
-    detail: detailOf(e),
-  }));
-  const histRows: Row[] = hist
-    .slice()
-    .sort((a, b) => b.last - a.last)
-    .map((h) => ({
-      domain: h.domain,
-      server: h.server,
-      cost: h.cost,
-      ips: h.ips,
-      extra: `首次 ${timeText(h.first)} · 最近 ${timeText(h.last)}`,
-      key: `${h.domain}|${h.server || ''}`,
-      detail: [
-        `IP：${h.ips || '无'}（历史只保存前 2 个 IP）`,
-        `首次出现：${timeText(h.first)}`,
-        `最近出现：${timeText(h.last)}`,
-        '完整的解析过程请切到“当前缓存”里看',
-      ],
-    }));
-  const base: Row[] = view === '历史' ? histRows : cacheRows;
+  const dnsRow = (e: Entry): Row => {
+    const rt = routeMap[(e.domain || '').toLowerCase()];
+    return {
+      key: `${e.domain}|${e.server || ''}`,
+      domain: e.domain,
+      kind: kindOf(e.server),
+      sub: `${e.server || '—'} · ${ms(e.timeCost)}`,
+      ips: (e.data || []).slice(0, 2).join(', ') || '无 IP',
+      route: rt ? routeText(rt.policy, rt.rule, rt.kind) : '',
+      extra: '',
+      detail: detailOf(e),
+    };
+  };
 
-  const count = (k: string) => base.filter((r) => kindOf(r.server) === k).length;
+  const histRow = (h: Hist): Row => ({
+    key: `${h.domain}|${h.server || ''}`,
+    domain: h.domain,
+    kind: kindOf(h.server),
+    sub: `${h.server || '—'} · ${ms(h.cost)}`,
+    ips: h.ips || '无 IP',
+    route: routeText(h.policy, h.rule, h.policy ? routeKindOf(h.policy, '', false) : ''),
+    extra: `首次 ${timeText(h.first)} · 最近 ${timeText(h.last)}`,
+    detail: [
+      `IP：${h.ips || '无'}（历史只保存前 2 个 IP）`,
+      `首次出现：${timeText(h.first)}`,
+      `最近出现：${timeText(h.last)}`,
+      '完整的解析过程请切到“当前缓存”里看',
+    ],
+  });
+
+  const reqRow = (r: Req): Row => ({
+    key: `req-${r.id}`,
+    domain: r.host,
+    kind: r.kind,
+    sub: `${r.policy || '—'} · 规则 ${r.rule || '—'}`,
+    ips: r.remote || '',
+    route: '',
+    extra: `${r.method || ''} · ${r.start ? timeText(r.start * 1000) : ''}`,
+    detail: reqDetailOf(r),
+  });
+
+  let base: Row[] = [];
+  if (view === '请求') {
+    base = reqs.map(reqRow);
+  } else if (view === '历史') {
+    base = hist
+      .slice()
+      .sort((a, b) => b.last - a.last)
+      .map(histRow);
+  } else {
+    base = entries.map(dnsRow);
+  }
+
+  const filters = view === '请求' ? REQ_FILTERS : DNS_FILTERS;
+  const cats = view === '请求' ? ['直连', '代理', '拦截'] : ['国内', '国外', '系统'];
+  const count = (k: string) => base.filter((r) => r.kind === k).length;
 
   const terms = termsOf(q);
   const shown = base.filter((r) => {
-    const okKind = filter === '全部' || kindOf(r.server) === filter;
+    const okKind = filter === '全部' || r.kind === filter;
     const name = (r.domain || '').toLowerCase();
     const okText = terms.every((t) => name.includes(t));
     return okKind && okText;
   });
 
+  const viewTitle = view === '请求' ? '最近请求' : view === '历史' ? '历史记录' : '解析记录';
+  const totalLabel = view === '请求' ? '请求共' : view === '历史' ? '历史共' : '缓存共';
+
   return (
     <NavigationStack>
       <List
-        navigationTitle="Surge DNS 观察 v0.5.0"
+        navigationTitle="Surge DNS 观察 v0.6.0"
         navigationBarTitleDisplayMode="inline"
         toolbar={
           <Toolbar>
@@ -373,27 +546,28 @@ function SurgeDnsApp({ initial, initialKey }: { initial: Entry[]; initialKey: st
 
         <Section
           header={<Text>概览</Text>}
-          footer={<Text>最后更新：{updated}　（历史只在脚本打开并刷新时记录；Surge 自己只保留约 200 条缓存）</Text>}
+          footer={<Text>最后更新：{updated}　（历史只在脚本打开并刷新时记录；Surge 自己只保留约 200 条 DNS 缓存和最近的请求）</Text>}
         >
           <HStack>
-            <Text>{view === '历史' ? '历史共' : '缓存共'} {base.length} 条</Text>
+            <Text>{totalLabel} {base.length} 条</Text>
             <Spacer />
-            <Text foregroundStyle="systemGreen">国内 {count('国内')}</Text>
-            <Text foregroundStyle="systemBlue">国外 {count('国外')}</Text>
-            <Text foregroundStyle="systemOrange">系统 {count('系统')}</Text>
+            {cats.map((c) => (
+              <Text key={c} foregroundStyle={colorOf(c)}>{c} {count(c)}</Text>
+            ))}
           </HStack>
           <Button
-            title={`视图：${view === '历史' ? '历史记录' : '当前缓存'}（点一下切换）`}
+            title={`视图：${VIEW_NAMES[view]}（点一下切换）`}
             action={() => {
-              setView(view === '历史' ? '缓存' : '历史');
+              setView(VIEW_ORDER[(VIEW_ORDER.indexOf(view) + 1) % VIEW_ORDER.length]);
+              setFilter('全部');
               setConfirmClear(false);
+              setExpandedKey('');
             }}
           />
           <Button
             title={`筛选：${filter}（点一下切换）`}
             action={() => {
-              const order = ['全部', '国内', '国外', '其他'];
-              setFilter(order[(order.indexOf(filter) + 1) % order.length]);
+              setFilter(filters[(filters.indexOf(filter) + 1) % filters.length]);
             }}
           />
           <Button
@@ -414,34 +588,30 @@ function SurgeDnsApp({ initial, initialKey }: { initial: Entry[]; initialKey: st
           />
         </Section>
 
-        <Section header={<Text>{`${view === '历史' ? '历史记录' : '解析记录'}（${shown.length}）`}</Text>}>
-          {shown.map((r, i) => {
-            const k = kindOf(r.server);
-            return (
-              <VStack alignment="leading" key={`${r.domain}-${r.server}-${i}`}>
-                <Text bold>{r.domain}</Text>
-                <HStack>
-                  <Text font="caption" bold foregroundStyle={colorOf(k)}>{k}</Text>
-                  <Text font="caption" foregroundStyle="secondaryLabel">
-                    {r.server || '—'} · {ms(r.cost)}
-                  </Text>
-                </HStack>
-                <Text font="caption" foregroundStyle="secondaryLabel">{r.ips || '无 IP'}</Text>
-                {r.extra ? <Text font="caption" foregroundStyle="secondaryLabel">{r.extra}</Text> : null}
-                <Button
-                  title={expandedKey === r.key ? '收起详情' : '展开详情'}
-                  action={() => setExpandedKey(expandedKey === r.key ? '' : r.key)}
-                />
-                {expandedKey === r.key
-                  ? r.detail.map((line, j) => (
-                      <Text font="caption" foregroundStyle="secondaryLabel" key={`${r.key}-d${j}`}>
-                        {line}
-                      </Text>
-                    ))
-                  : null}
-              </VStack>
-            );
-          })}
+        <Section header={<Text>{`${viewTitle}（${shown.length}）`}</Text>}>
+          {shown.map((r, i) => (
+            <VStack alignment="leading" key={`${r.key}-${i}`}>
+              <Text bold>{r.domain}</Text>
+              <HStack>
+                <Text font="caption" bold foregroundStyle={colorOf(r.kind)}>{r.kind}</Text>
+                <Text font="caption" foregroundStyle="secondaryLabel">{r.sub}</Text>
+              </HStack>
+              {r.ips ? <Text font="caption" foregroundStyle="secondaryLabel">{r.ips}</Text> : null}
+              {r.route ? <Text font="caption" foregroundStyle="secondaryLabel">{r.route}</Text> : null}
+              {r.extra ? <Text font="caption" foregroundStyle="secondaryLabel">{r.extra}</Text> : null}
+              <Button
+                title={expandedKey === r.key ? '收起详情' : '展开详情'}
+                action={() => setExpandedKey(expandedKey === r.key ? '' : r.key)}
+              />
+              {expandedKey === r.key
+                ? r.detail.map((line, j) => (
+                    <Text font="caption" foregroundStyle="secondaryLabel" key={`${r.key}-d${j}`}>
+                      {line}
+                    </Text>
+                  ))
+                : null}
+            </VStack>
+          ))}
         </Section>
 
         <Section
@@ -463,17 +633,23 @@ async function run() {
   const key = loadKey();
   histStore = loadHist();
   let initial: Entry[] = [];
+  let initialReqs: Req[] = [];
   if (key) {
     try {
       const j = await api('/v1/dns', key);
       initial = j.dnsCache || [];
+      try {
+        const rj = await api('/v1/requests/recent', key);
+        initialReqs = parseReqs(rj.requests || []);
+      } catch {}
+      updateRoutes(initialReqs);
       mergeHist(initial);
     } catch {}
   }
   running = true;
   scheduleTick();
   await Navigation.present({
-    element: <SurgeDnsApp initial={initial} initialKey={key} />,
+    element: <SurgeDnsApp initial={initial} initialReqs={initialReqs} initialKey={key} />,
     modalPresentationStyle: 'pageSheet',
   });
   running = false;
