@@ -1,5 +1,6 @@
-// 版本：0.4.0
+// 版本：0.4.1
 // 日期：2026-10-18
+// 0.4.1：修复搜索搜不到（输入法常在词后自动补空格，现在会去掉首尾空格和隐藏字符；多个词用空格隔开表示“同时包含”）；搜索框下临时显示实际搜索词，方便排查
 // 0.4.0：新增历史记录（自动保存出现过的网址，可切换查看、可清空；最多保留 3000 条）
 // 0.3.2：修复运行报错 Cannot find name 'setInterval' / 'clearInterval'（Scripting 里没有这两个名字，改用 setTimeout 循环实现自动刷新）
 // 0.3.1：修复 0.3.0 压缩包里 script.json 是空的、导致 Scripting 报“不支持的脚本文件”
@@ -138,6 +139,20 @@ function mergeHist(cache: Entry[]): number {
   // 有新网址就马上存；没有新网址时每 10 次刷新存一次，减少写入
   if (added > 0 || mergeCount % 10 === 0) saveHist();
   return added;
+}
+
+// 把输入的搜索词整理成一组小词：去掉隐藏字符、全角转半角、去掉首尾空格、转小写、按空格拆开
+function termsOf(q: string): string[] {
+  let t = String(q || '');
+  try {
+    t = t.normalize('NFKC');
+  } catch {}
+  t = t.replace(/[\u200B-\u200D\u2060\uFEFF]/g, '');
+  return t
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((x) => x.length > 0);
 }
 
 function timeText(ts: number): string {
@@ -296,16 +311,18 @@ function SurgeDnsApp({ initial, initialKey }: { initial: Entry[]; initialKey: st
 
   const count = (k: string) => base.filter((r) => kindOf(r.server) === k).length;
 
+  const terms = termsOf(q);
   const shown = base.filter((r) => {
     const okKind = filter === '全部' || kindOf(r.server) === filter;
-    const okText = !q || (r.domain || '').toLowerCase().includes(q.toLowerCase());
+    const name = (r.domain || '').toLowerCase();
+    const okText = terms.every((t) => name.includes(t));
     return okKind && okText;
   });
 
   return (
     <NavigationStack>
       <List
-        navigationTitle="Surge DNS 观察 v0.4.0"
+        navigationTitle="Surge DNS 观察 v0.4.1"
         navigationBarTitleDisplayMode="inline"
         toolbar={
           <Toolbar>
@@ -357,6 +374,11 @@ function SurgeDnsApp({ initial, initialKey }: { initial: Entry[]; initialKey: st
             }}
           />
           <TextField title="搜索网址" prompt="输入网址的一部分，例如 baidu" value={q} onChanged={setQ} />
+          {q ? (
+            <Text font="caption" foregroundStyle="secondaryLabel">
+              {`实际搜索：${terms.length ? terms.map((t) => `「${t}」`).join(' + ') : '（空）'}　输入了 ${q.length} 个字符`}
+            </Text>
+          ) : null}
           <Button title="清空 DNS 缓存" action={flush} />
           <Button
             title={confirmClear ? `再点一次确认：清空全部 ${hist.length} 条历史` : `清空历史记录（现有 ${hist.length} 条）`}
